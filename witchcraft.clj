@@ -9,7 +9,7 @@
             (def contents (assoc contents material (+ (get contents material 0) (get item :amount))))))
     contents))
 
-(defn player-has-materials [player materials]
+(defn player-has-materials? [player materials]
   (def remaining (get-inv-contents player))
   (doseq [kv materials]
     (let [material (first kv) qty (second kv)]
@@ -31,7 +31,7 @@
   "Build a structure for a player, using blocks from their inventory."
   (let [materials (get-materials blocks)
         offset-blocks (map #(wc/add % pos) blocks)]
-    (if (player-has-materials player materials)
+    (if (player-has-materials? player materials)
       (do 
         (remove-materials player materials)
         (wc/set-blocks offset-blocks))
@@ -47,17 +47,16 @@
 
 ;; Building schematic
 (defn house [dx dy dz material]
-  (letfn [(is-wall [x dx] (or (= x 0) (= x (dec dx))))
-          (is-roof [y dy] (= y (dec dy)))]
+  (letfn [(is-wall? [x dx] (or (= x 0) (= x (dec dx))))
+          (is-roof? [y dy] (= y (dec dy)))]
     (for [x (range dx)
           y (range dy)
           z (range dz)
-          :when (or (is-wall x dx) (is-wall z dz) (is-roof y dy))]
+          :when (or (is-wall? x dx) (is-wall? z dz) (is-roof? y dy))]
       [x y z material])))
 
 (def me (wc/player "maximus1233"))
 (def pos [-10 72.0 -67])
 (def my-house (house 7 4 7 :dark-oak-planks))
-(get-materials my-house)
 (build me pos my-house)
 (deconstruct me my-house)
