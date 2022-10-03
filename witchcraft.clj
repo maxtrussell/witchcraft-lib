@@ -24,17 +24,14 @@
     (def total (assoc total (nth item 3) (+ (get total (nth item 3) 0) 1))))
   total)
 
-(defn remove-materials [player materials]
-  (doseq [[material qty] materials]
-    (wc/remove-inventory player material qty)))
-
 (defn build [player pos blocks]
   "Build a structure for a player, using blocks from their inventory."
   (let [materials (get-materials blocks)
         offset-blocks (map #(wc/add % pos) blocks)]
     (if (player-has-materials? player materials)
       (do 
-        (remove-materials player materials)
+        (doseq [[material qty] materials]
+          (wc/remove-inventory player material qty))
         (wc/set-blocks offset-blocks))
       "Insufficient materials")))
 
