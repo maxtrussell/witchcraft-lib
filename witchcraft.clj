@@ -1,34 +1,26 @@
 (ns net.maxtrussell.witchcraft
-  (:require [lambdaisland.witchcraft :as wc]))
-
-(use 'clojure.string)
-
-(defmacro append [xs x]
-  `(def ~xs (conj ~xs ~x)))
-
-(defmacro set-key [m k v]
-  `(def ~m (assoc ~m ~k ~v)))
+  (:require [lambdaisland.witchcraft :as wc]
+            [clojure.set :as set]
+            [clojure.string :as string]))
 
 (defn get-inv-contents [player]
-  (def contents (hash-map))
   (let [inv (remove nil? (get (wc/inventory player) :contents))]
-    (doseq [item inv]
-      (let [material (get item :material)]
-        (set-key contents material (+ (get contents material 0) (get item :amount)))))
-    contents))
+    (reduce (fn [acc item]
+              (let [material (get item :material)
+                    qty (get item :amount)]
+                (assoc acc material (+ (get acc material 0) qty))))
+            {} inv)))
 
 (defn player-has-materials? [player materials]
-  (def remaining (get-inv-contents player))
-  (doseq [[material qty] materials]
-    (when (not (nil? material))
-      (set-key remaining material (- (get remaining material 0) qty))))
-  (reduce (fn [acc [material qty]] (and acc (>= qty 0))) true remaining))
+  (let* [inv (get-inv-contents player)
+         remaining (into {} (map (fn [[material qty]]
+                                   {material (- (get inv material 0) qty)}) materials))]
+  (reduce (fn [acc [material qty]] (and acc (>= qty 0))) true remaining)))
 
-(defn get-materials [materials]
-  (def total (hash-map))
-  (doseq [item materials]
-    (set-key total (nth item 3) (+ (get total (nth item 3) 0) 1)))
-  total)
+(defn get-materials [blocks]
+  (reduce (fn [acc block]
+            (let [material (nth block 3)]
+              (assoc acc material (inc (get acc material 0))))) (hash-map) blocks))
 
 (defn build [player pos blocks]
   "Build a structure for a player, using blocks from their inventory."
@@ -49,44 +41,47 @@
     (doseq [[material amount] materials]
       (wc/add-inventory me material amount))))
 
-(defn add-maps [maps]
-  (def sum-map (hash-map))
-  (doseq [m maps]
-    (doseq [[k v] m]
-      (set-key sum-map k (+ (get sum-map k 0) v))))
-  sum-map)
+(defn add-maps [m1 m2]
+  (let [keys (set/union (set (keys m1)) (set (keys m2)))]
+    (into {} (map (fn [k] {k (+ (get m1 k 0) (get m2 k 0))}) keys))))
 
 (defn dfs [loc pred? func!]
   "Performs a depth first search of all blocks matching pred? and applies func. Returns map of found blocks."
-  (def found (hash-map))
-  ;; FIXME: Seen isn't properly being used by recursive calls
-  (def seen (set '()))
-  (let* [block (wc/block loc)
-         material (get block :material)]
-    (if (pred? block)
-      (do (set-key found material (+ (get found material 0) 1))
+  ;; TODO: return raw list of blocks so coy can use
+  (if (pred? (wc/block loc))
+    (loop [stack [loc]
+           visited []
+           found {}]
+      (if (empty? stack)
+        found
+        (let* [loc (peek stack)
+               neighbors (filter
+                          (fn [n] (and (pred? (wc/block n))
+                                       (not (.contains visited n))))
+                          (get-neighbors loc))
+               new-stack (into (pop stack) neighbors)
+               block (wc/block loc)
+               material (get block :material)]
           (func! block)
-          (doseq [n (get-neighbors loc)]
-            (when (nil? (seen n))
-              (def found (add-maps [found (dfs n pred? func!)]))
-              (append seen n))))))
-  found)
+          (recur new-stack
+                 (conj visited loc)
+                 (assoc found material (inc (get found material 0)))))))
+    {}))
 
 (defn get-neighbors [loc]
   "Find all neighbors of a given block"
-  (def neighbors [])
   (let [deltas [[1 0 0] [0 1 0] [0 0 1] [-1 0 0] [0 -1 0] [0 0 -1]]]
-    (doseq [delta deltas]
-      (def neighbors (conj neighbors (into {} (map (fn [d [k v]] {k (+ v d)}) delta loc))))))
-  neighbors)
+    (map (fn [delta]
+           (into {} (map (fn [d [k v]] {k (+ v d)}) delta loc)))
+         deltas)))
 
 (defn fell-tree [player loc]
   "Use dfs to remove all logs of a tree and give to player."
-  (letfn [(is-log? [block] (ends-with? (get block :material) "-log"))
-          (remove-block! [block] (wc/set-block block :air))]
-    (let [wood (dfs loc is-log? remove-block!)]
-      (doseq [[material amount] wood]
-        (wc/add-inventory player material amount))
+  (letfn [(is-log? [block] (string/ends-with? (get block :material) "-log"))
+          (remove-block! [block] (wc/set-block (wc/xyz block) :air))]
+    (let* [wood (dfs loc is-log? remove-block!)]
+      (doseq [[material qty] wood]
+        (wc/add-inventory player material qty))
       wood)))
 
 ;; Building schematic
@@ -99,11 +94,11 @@
           :when (or (is-wall? x dx) (is-wall? z dz) (is-roof? y dy))]
       [x y z material])))
 
-(fell-tree me {:x -6 :y 76 :z -52})
-(wc/undo!)
-
 (def me (wc/player "maximus1233"))
 (def pos {:x -7 :y 72 :z -62})
 (def my-house (house 7 4 7 :dark-oak-planks))
+(get-materials my-house)
 (build me pos my-house)
 (deconstruct me my-house)
+(fell-tree me {:x 0 :y 74 :z -68})
+(wc/undo!)
