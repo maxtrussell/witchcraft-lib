@@ -19,3 +19,5 @@ Ideally the project structure will look like this. Once we can get the REPL to u
 - Spigot Javadocs: https://hub.spigotmc.org/javadocs/spigot/
 - Cauldron Repo: https://github.com/plexus/cauldron
 - CraftBukkit Code: https://hub.spigotmc.org/stash/projects/SPIGOT/repos/craftbukkit/browse
+- Witchcraft Repo: https://github.com/lambdaisland/witchcraft
+- Witchcraft Plugin Repo: https://github.com/lambdaisland/witchcraft-plugin

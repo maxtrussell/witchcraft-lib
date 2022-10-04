@@ -1,5 +1,6 @@
 (ns net.maxtrussell.witchcraft
   (:require [lambdaisland.witchcraft :as wc]
+            [lambdaisland.witchcraft.events :as e]
             [clojure.set :as set]
             [clojure.string :as string]))
 
@@ -7,20 +8,6 @@
 (def seeds {:wheat-seeds :wheat, :carrot :carrot, :potato :potato})
 (def crops #{:wheat :carrots :potatoes :beetroots})
 (def crops-mature {:wheat 7 :carrots 7 :potatoes 7 :beetroots 3})
-(def drop-table {:redstone-ore {:redstone #(roll 4 5)}
-                 :lapis-ore {:lapis-lazuli #(roll 4 9)}
-                 :copper-ore {:raw-copper #(roll 2 5)}
-                 :wheat {:wheat #(roll 1 1) :wheat-seeds #(roll 0 3)}
-                 :potatoes {:potato #(roll 1 5)
-                            :poisonous-potato (fn [] (if (>= 98 (rand-int 100)) 1 0))}
-                 ;; FIXME: Carrot isn't 100% accurate,
-                 ;;        see: https://minecraft.fandom.com/wiki/Carrot#Breaking
-                 :carrots {:carrot #(roll 2 5)}
-                 :beetroots {:beetroot #(roll 1 1) :beetroot-seeds #(roll 1 4)}})
-
-(defn roll [min max]
-  "Generates an int from min to max, inclusive"
-  (+ min (rand-int (- (inc max) min))))
 
 (defn get-inv-contents [player]
   (let [inv (remove nil? (get (wc/inventory player) :contents))]
@@ -98,8 +85,11 @@
          deltas)))
 
 (defn fell-tree [player loc]
-  "Harvest entire tree"
-  (harvest player loc (fn [block] (string/ends-with? (get block :material) "-log"))))
+  "Harvest entire tree or giant mushroom"
+  (harvest player loc (fn [block]
+                        (or (string/ends-with? (get block :material) "-log")
+                            (= (get block :material) :mushroom-stem)
+                            (string/ends-with? (get block :material) "mushroom-block")))))
 
 (defn mine-vein [player loc]
   "Harvest entire ore vein"
@@ -108,26 +98,23 @@
 (defn harvest-crops [player loc]
   "Harvest mature crops from farm"
   (letfn [(crop-age [block] (get (get block :block-data) :age))]
-    (let [crops #{:wheat :carrots :potatoes :beetroots}]
+    (let [crops #{:wheat :carrots :potatoes :beetroots :melon :pumpkin}]
       (harvest player loc (fn [block] (and
                                        (crops (get block :material))
                                        (>=
                                         (crop-age block)
                                         (get crops-mature (get block :material)))))))))
 
+;; TODO: Make harvest accept a list of blocks instead of calling DFS
+;;       so it can be used by other funcs such as quarry.
 (defn harvest [player loc pred?]
   "Use dfs to remove all blocks and give to player, damaging the equipped tool"
-  (letfn [(remove-block! [block] (wc/set-block (wc/xyz block) :air))]
-    ;; TODO: Set limit as max(tool-capacity 200)
-    (let* [harvested (dfs loc pred? remove-block! :limit 200)
-           tool (wc/item-in-hand player)
-           tool-use (reduce (fn [acc [_ qty]] (+ acc qty)) 0 harvested)]
-      ;; Do double damage to the tool for each block harvested
-      (.setDurability tool (+ (.getDurability tool) (* 2 tool-use)))
-      (doseq [[material qty] harvested]
-        (let [yield (reduce add-maps (take qty (repeatedly #(get-drop material))))]
-          (doseq [[k v] yield] (wc/add-inventory me k v))))
-      harvested)))
+  ;; TODO: Set limit as max(tool-capacity 200)
+  (let* [harvested (dfs loc pred? wc/break-naturally :limit 200)
+         tool (wc/item-in-hand player)
+         tool-use (reduce (fn [acc [_ qty]] (+ acc qty)) 0 harvested)]
+    (.setDurability tool (+ (.getDurability tool) (* 1 tool-use)))
+    harvested))
 
 (defn get-drop [item]
   "Rolls for a drop for given item on the drop table. Defaults to 1"
@@ -147,6 +134,24 @@
           (wc/remove-inventory me seed-type qty))
         used))))
 
+(defn cube-walk [loc dx dy dz pred? func!]
+  (let [blocks (for [x (range dx)
+                     y (range dy)
+                     z (range dz)
+                     :when (pred? (wc/block (into [] (map + [x y z] (wc/xyz loc)))))]
+                 [(wc/block (into [] (map + [x y z] (wc/xyz loc))))])]
+    (doseq [block blocks] (func! block))
+    blocks))
+
+(defn scan [player loc dx dy dz]
+  "Returns a vector of blocks in the scanned cube"
+  (cube-walk player loc dx dy dz (fn [_] true) (fn [_] true)))
+
+(defn quarry [player loc dx dy dz]
+  "Harvest all blocks in a dx*dy*dz cube"
+  (let [blocks (cube-walk loc dx dy dz (fn [_] true) (fn [_] true))]
+    (harvest player blocks)))
+
 ;; Building schematic
 (defn house [dx dy dz material]
   (letfn [(is-wall? [x dx] (or (= x 0) (= x (dec dx))))
@@ -157,6 +162,49 @@
           :when (or (is-wall? x dx) (is-wall? z dz) (is-roof? y dy))]
       [x y z material])))
 
+(defn inspect-block [player]
+  (wc/send-message me (.toString (wc/block (wc/target-block player)))))
+
+;; Bind functions to tools
+(defn give-truncator [player]
+  (let [axe (wc/item-stack :diamond-axe)]
+    (wc/set-display-name axe "Truncator")
+    (wc/set-lore axe [:italic "A magical dwarv-"])
+    (wc/add-inventory player axe)))
+
+(defn give-deveiner [player]
+  (let [pick (wc/item-stack :diamond-pickaxe)]
+    (wc/set-display-name pick "De-Veiner")
+    (wc/set-lore pick [:italic "A pickaxe infused with witchery"])
+    (wc/add-inventory player pick)))
+
+(defn give-peeper [player]
+  (let [spyglass (wc/item-stack :spyglass)]
+    (wc/set-display-name spyglass "Peeper")
+    (wc/set-lore spyglass [:italic "A spyglass infused with witchery"])
+    (wc/add-inventory player spyglass)))
+
+(defn register-tool-listener! []
+  (e/listen!
+   :player-interact
+   ::peeper
+   (fn [{:keys [clickedBlock player]}]
+     (when (and clickedBlock (= "Peeper" (wc/display-name (wc/item-in-hand player))))
+       (inspect-block player))))
+  (e/listen!
+   :block-break
+   ::truncator
+   (fn [{:keys [block player]}]
+     (when (and block (= "Truncator" (wc/display-name (wc/item-in-hand player))))
+       (fell-tree player (wc/block block))))))
+  (e/listen!
+   :block-break
+   ::deveiner
+   (fn [{:keys [block player]}]
+     (when (and block (= "De-Veiner" (wc/display-name (wc/item-in-hand player))))
+       (mine-vein player (wc/block block))))))
+(register-tool-listener!)
+
 (def me (wc/player "maximus1233"))
 (def pos {:x -7 :y 72 :z -62})
 (def my-house (house 7 4 7 :dark-oak-planks))
@@ -164,11 +212,18 @@
 (build me pos my-house)
 (deconstruct me my-house)
 (fell-tree me (wc/target-block me))
-(plant-crops me {:x 2 :y 71 :z -67})
-(harvest-crops me {:x 2 :y 72 :z -67})
+(plant-crops me (wc/target-block me))
+(harvest-crops me (wc/target-block me))
 (mine-vein me {:x 0 :y 72 :z -68})
+(scan me (wc/target-block me) 3 3 3)
 (wc/clear-weather)
+
+(wc/send-message me "foo")
+(.broadcastMessage (wc/server) "foo")
 
 (.getInventory (wc/get-target-block me))
 (.getType (first (.getContents (wc/get-inventory (wc/get-target-block me)))))
 (wc/get-inventory [-5 72 -63])
+(wc/break-naturally (wc/target-block me))
+
+(wc/fly! me)
