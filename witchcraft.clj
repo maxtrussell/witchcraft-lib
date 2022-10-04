@@ -163,8 +163,12 @@
 (get-materials my-house)
 (build me pos my-house)
 (deconstruct me my-house)
-
+(fell-tree me (wc/target-block me))
 (plant-crops me {:x 2 :y 71 :z -67})
 (harvest-crops me {:x 2 :y 72 :z -67})
 (mine-vein me {:x 0 :y 72 :z -68})
 (wc/clear-weather)
+
+(.getInventory (wc/get-target-block me))
+(.getType (first (.getContents (wc/get-inventory (wc/get-target-block me)))))
+(wc/get-inventory [-5 72 -63])
