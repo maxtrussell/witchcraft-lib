@@ -28,14 +28,15 @@
             (let [material (nth block 3)]
               (assoc acc material (inc (get acc material 0))))) (hash-map) blocks))
 
-(defn build [player pos blocks]
+(defn build [player pos blocks & {:keys [free?] :or {free? false}}]
   "Build a structure for a player, using blocks from their inventory."
   (let [materials (get-materials blocks)
         offset-blocks (map #(wc/add % pos) blocks)]
-    (if (player-has-materials? player materials)
+    (if (or free? (player-has-materials? player materials))
       (do 
-        (doseq [[material qty] materials]
-          (wc/remove-inventory player material qty))
+        (when (not free?)
+          (doseq [[material qty] materials]
+            (wc/remove-inventory player material qty)))
         (wc/set-blocks offset-blocks))
       "Insufficient materials")))
 
@@ -86,10 +87,10 @@
 
 (defn fell-tree [player loc]
   "Harvest entire tree or giant mushroom"
-  (harvest player loc (fn [block]
-                        (or (string/ends-with? (get block :material) "-log")
-                            (= (get block :material) :mushroom-stem)
-                            (string/ends-with? (get block :material) "mushroom-block")))))
+  (let [other-blocks #{:melon :pumpkin :mushroom-stem :red-mushroom-block :brown-mushroom-block}]
+    (harvest player loc (fn [block]
+                          (or (string/ends-with? (get block :material) "-log")
+                              (other-blocks (:material block)))))))
 
 (defn mine-vein [player loc]
   "Harvest entire ore vein"
@@ -139,13 +140,33 @@
                      y (range dy)
                      z (range dz)
                      :when (pred? (wc/block (into [] (map + [x y z] (wc/xyz loc)))))]
-                 [(wc/block (into [] (map + [x y z] (wc/xyz loc))))])]
+                 (wc/block (into [] (map + [x y z] (wc/xyz loc)))))]
     (doseq [block blocks] (func! block))
     blocks))
 
-(defn scan [player loc dx dy dz]
+(defn scan [loc dx dy dz]
   "Returns a vector of blocks in the scanned cube"
-  (cube-walk player loc dx dy dz (fn [_] true) (fn [_] true)))
+  (let* [blocks (cube-walk loc dx dy dz (fn [block] (not (= :air (:material block)))) (fn [_] true))]
+    (offset-blocks - blocks loc)))
+
+(defn paste [loc blocks]
+  (wc/set-blocks (offset-blocks + blocks loc)))
+
+(defn rotate-block [block]
+  "Rotates a block relative to {:x 0 :z 0}"
+  (let [{x :x z :z} block
+        new-cords {:x z :z (* x -1)}]
+    (reduce #(assoc %1 %2 (get new-cords %2)) block [:x :z])))
+(rotate-block {:x 1 :y 0 :z 2})
+
+(defn rotate-blocks [blocks]
+  (map (fn [block] (rotate-block block)) blocks))
+
+(defn offset-blocks [fun blocks offset]
+  (map (fn [block] (offset-block fun block offset)) blocks))
+
+(defn offset-block [fun block offset]
+  (reduce #(assoc %1 %2 (fun (get block %2) (get offset %2))) block [:x :y :z]))
 
 (defn quarry [player loc dx dy dz]
   "Harvest all blocks in a dx*dy*dz cube"
@@ -161,6 +182,16 @@
           z (range dz)
           :when (or (is-wall? x dx) (is-wall? z dz) (is-roof? y dy))]
       [x y z material])))
+
+(defn farm []
+  (for [x (range 5)
+        z (range 5)]
+    (if (= x z 2)
+      [x 0 z :water]
+      [x 0 z :farmland])))
+(wc/target-block me)
+(build me (wc/target-block me) (farm) :free? true)
+(wc/undo!)
 
 (defn inspect-block [player]
   (wc/send-message me (.toString (wc/block (wc/target-block player)))))
@@ -188,8 +219,8 @@
   (e/listen!
    :player-interact
    ::peeper
-   (fn [{:keys [clickedBlock player]}]
-     (when (and clickedBlock (= "Peeper" (wc/display-name (wc/item-in-hand player))))
+   (fn [{:keys [player]}]
+     (when (= "Peeper" (wc/display-name (wc/item-in-hand player)))
        (inspect-block player))))
   (e/listen!
    :block-break
@@ -207,23 +238,8 @@
 
 (def me (wc/player "maximus1233"))
 (def pos {:x -7 :y 72 :z -62})
-(def my-house (house 7 4 7 :dark-oak-planks))
-(get-materials my-house)
-(build me pos my-house)
-(deconstruct me my-house)
-(fell-tree me (wc/target-block me))
-(plant-crops me (wc/target-block me))
-(harvest-crops me (wc/target-block me))
-(mine-vein me {:x 0 :y 72 :z -68})
-(scan me (wc/target-block me) 3 3 3)
-(wc/clear-weather)
 
-(wc/send-message me "foo")
-(.broadcastMessage (wc/server) "foo")
-
-(.getInventory (wc/get-target-block me))
-(.getType (first (.getContents (wc/get-inventory (wc/get-target-block me)))))
-(wc/get-inventory [-5 72 -63])
-(wc/break-naturally (wc/target-block me))
-
-(wc/fly! me)
+(def clipboard (scan (wc/target-block me) 3 3 3))
+(def clipboard (rotate-blocks clipboard))
+(list clipboard)
+(paste (wc/targt-block me) clipboard)
